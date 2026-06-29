@@ -45,6 +45,8 @@ function makeIdentifier(sort: string, type: Type): string {
 
 export class Database implements BaseDatabase<Chart> {
     private cache = new Cache<RawSong[]>("gcm-database-otogedb/maimai");
+    /** Shared in-flight fetch, so concurrent calls don't each issue a PUT. */
+    private inflight: Promise<RawSong[]> | null = null;
 
     /**
      * @param source Where charts and jackets are read from. Defaults to the
@@ -56,11 +58,20 @@ export class Database implements BaseDatabase<Chart> {
         const key = `music-ex:${this.source.cacheKey}`;
         const cached = await this.cache.get(key);
         if (cached) return cached as RawSong[];
-        const songs = await this.source.getSongList("maimai");
-        if (songs.length > 0) {
-            await this.cache.put(key, songs, SONG_LIST_TTL);
+        // Coalesce concurrent misses onto a single fetch/PUT.
+        if (this.inflight) return this.inflight;
+        this.inflight = (async () => {
+            const songs = await this.source.getSongList("maimai");
+            if (songs.length > 0) {
+                await this.cache.put(key, songs, SONG_LIST_TTL);
+            }
+            return songs;
+        })();
+        try {
+            return await this.inflight;
+        } finally {
+            this.inflight = null;
         }
-        return songs;
     }
 
     /**
