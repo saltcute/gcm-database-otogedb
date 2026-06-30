@@ -55,7 +55,7 @@ export class CdnSource implements Source {
 
     public getMusicListName(game: Game, region: Regions = "JPN") {
         if (game !== "ongeki" && region === "INT") {
-            return "music-intl";
+            return "music-ex-intl";
         } else {
             return "music-ex";
         }
