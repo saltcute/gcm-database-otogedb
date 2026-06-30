@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Game, RawSong } from "./otogedb";
 
+export type Regions = "JPN" | "INT";
+
 /**
  * A place charts and jackets are read from.
  *
@@ -17,12 +19,13 @@ export interface Source {
      * interchangeable; different keys never share cache entries.
      */
     readonly cacheKey: string;
+    getMusicListName(game: Game, region?: Regions): string;
     /**
      * Read the `music-ex.json` song list of a game. This is the most complete
      * dataset Otoge-DB provides, bundling note counts, internal levels and
      * chart links. Returns an empty array when it cannot be read.
      */
-    getSongList(game: Game): Promise<RawSong[]>;
+    getSongList(game: Game, region?: Regions): Promise<RawSong[]>;
     /**
      * Read a jacket image. Returns `null` when it cannot be read.
      */
@@ -50,10 +53,18 @@ export class CdnSource implements Source {
         return this.base;
     }
 
-    public async getSongList(game: Game): Promise<RawSong[]> {
+    public getMusicListName(game: Game, region: Regions = "JPN") {
+        if (game !== "ongeki" && region === "INT") {
+            return "music-intl";
+        } else {
+            return "music-ex";
+        }
+    }
+
+    public async getSongList(game: Game, region?: Regions): Promise<RawSong[]> {
         try {
             const response = await fetch(
-                `${this.base}/${game}/data/music-ex.json`,
+                `${this.base}/${game}/data/${this.getMusicListName(game, region)}.json`,
             );
             if (!response.ok) return [];
             return (await response.json()) as RawSong[];
@@ -95,6 +106,13 @@ export class LocalSource implements Source {
         return this.root;
     }
 
+    public getMusicListName(game: Game, region: Regions = "JPN") {
+        if (game !== "ongeki" && region === "INT") {
+            return "music-intl";
+        } else {
+            return "music-ex";
+        }
+    }
     /**
      * Whether the local clone exists at the configured path.
      */
@@ -102,8 +120,13 @@ export class LocalSource implements Source {
         return fs.existsSync(this.root);
     }
 
-    public async getSongList(game: Game): Promise<RawSong[]> {
-        const file = path.join(this.root, game, "data", "music-ex.json");
+    public async getSongList(game: Game, region?: Regions): Promise<RawSong[]> {
+        const file = path.join(
+            this.root,
+            game,
+            "data",
+            `${this.getMusicListName(game, region)}.json`,
+        );
         try {
             return JSON.parse(
                 await fs.promises.readFile(file, "utf-8"),
