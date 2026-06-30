@@ -1,6 +1,6 @@
 {
     "name": "gcm-database-otogedb",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "A GekiChuMai Metadata database",
     "homepage": "https://github.com/saltcute/gcm-database-otogedb#readme",
     "bugs": {
