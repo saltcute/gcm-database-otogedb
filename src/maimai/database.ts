@@ -29,18 +29,68 @@ const DIFFICULTY_PREFIX: Partial<Record<Difficulty, string>> = {
 };
 
 /**
- * Otoge-DB stores the standard and deluxe charts of a song in the same entry.
- * Deluxe charts are addressed by prefixing the song's `sort` value with `dx`.
+ * Separator between a song's `sort` value and its occurrence disambiguator.
+ * Otoge-DB `sort` values are bare integers, so this never appears in a real
+ * `sort` and cannot be confused with one or with the `dx` prefix.
  */
-function resolveIdentifier(identifier: string): { sort: string; type: Type } {
-    if (identifier.startsWith("dx")) {
-        return { sort: identifier.slice(2), type: Type.DELUXE };
-    }
-    return { sort: identifier, type: Type.STANDARD };
+const KEY_SEPARATOR = "_";
+
+interface IndexedSong {
+    /** A key that uniquely addresses this entry within its song list. */
+    key: string;
+    song: RawSong;
 }
 
-function makeIdentifier(sort: string, type: Type): string {
-    return type === Type.DELUXE ? `dx${sort}` : sort;
+interface SongIndex {
+    /** The song list in file order, each entry carrying its key. */
+    list: IndexedSong[];
+    /** Maps each key back to its single entry, for O(1) resolution. */
+    byKey: Map<string, RawSong>;
+}
+
+/**
+ * Assign each entry a key that is unique within the list. The first entry for a
+ * given `sort` keeps the bare `sort` (so identifiers for unique sorts — all of
+ * the JP list and ~97% of the intl list — stay byte-identical); later entries
+ * reusing that `sort` get a `_N` suffix (`161`, `161_1`, `161_2`).
+ *
+ * The JP `music-ex.json` has unique `sort`s, but `music-ex-intl.json` reuses a
+ * handful for genuinely different songs. maimai entries have no stable unique
+ * id, so the suffix is derived from array position: if Otoge-DB reorders the
+ * colliding entries, a previously issued `161_1` may point at a different song.
+ * That is inherent to the upstream data — callers should not treat suffixed
+ * identifiers as permanently stable.
+ */
+function indexSongs(songs: RawSong[]): SongIndex {
+    const counts = new Map<string, number>();
+    const list: IndexedSong[] = [];
+    const byKey = new Map<string, RawSong>();
+    for (const song of songs) {
+        const sort = song.sort ?? "";
+        const seen = counts.get(sort) ?? 0;
+        counts.set(sort, seen + 1);
+        const key = seen === 0 ? sort : `${sort}${KEY_SEPARATOR}${seen}`;
+        list.push({ key, song });
+        byKey.set(key, song);
+    }
+    return { list, byKey };
+}
+
+/**
+ * Otoge-DB stores the standard and deluxe charts of a song in the same entry.
+ * Deluxe charts are addressed by prefixing the entry's key with `dx`. The key
+ * is the song's `sort`, possibly with a `_N` occurrence suffix (see
+ * {@link indexSongs}).
+ */
+function resolveIdentifier(identifier: string): { key: string; type: Type } {
+    if (identifier.startsWith("dx")) {
+        return { key: identifier.slice(2), type: Type.DELUXE };
+    }
+    return { key: identifier, type: Type.STANDARD };
+}
+
+function makeIdentifier(key: string, type: Type): string {
+    return type === Type.DELUXE ? `dx${key}` : key;
 }
 
 export class Database implements BaseDatabase<Chart> {
@@ -78,10 +128,21 @@ export class Database implements BaseDatabase<Chart> {
     }
 
     /**
+     * The cached song list with a unique key assigned to every entry. Built
+     * fresh from {@link getAllSongs} on each call — a cheap O(n) pass that
+     * keeps the (cache-coalesced) song list as the single fetched source of
+     * truth and avoids storing a `Map` in the JSON-serialized cache.
+     */
+    private async getIndex(): Promise<SongIndex> {
+        return indexSongs(await this.getAllSongs());
+    }
+
+    /**
      * Build a single-difficulty chart out of an Otoge-DB song entry. Returns
      * `null` when the song does not have a chart for that type and difficulty.
      */
     private buildChart(
+        key: string,
         song: RawSong,
         type: Type,
         difficulty: Difficulty,
@@ -102,7 +163,7 @@ export class Database implements BaseDatabase<Chart> {
         if (!level) return null;
 
         return {
-            identifier: makeIdentifier(song.sort ?? "", type),
+            identifier: makeIdentifier(key, type),
             title: song.title ?? "",
             artist: song.artist ?? "",
             type: isUtage ? Type.STANDARD : type,
@@ -136,15 +197,15 @@ export class Database implements BaseDatabase<Chart> {
     }
 
     public async getChart(identifier: string, difficulty: Difficulty) {
-        const { sort, type } = resolveIdentifier(identifier);
-        const songs = await this.getAllSongs();
-        const song = songs.find((song) => song.sort === sort);
+        const { key, type } = resolveIdentifier(identifier);
+        const { byKey } = await this.getIndex();
+        const song = byKey.get(key);
         if (!song) {
             return {
                 err: `Cannot find a chart with identifier ${identifier}.`,
             };
         }
-        const chart = this.buildChart(song, type, difficulty);
+        const chart = this.buildChart(key, song, type, difficulty);
         if (!chart) {
             return {
                 err: `${identifier} does not have a ${difficulty} chart.`,
@@ -154,9 +215,9 @@ export class Database implements BaseDatabase<Chart> {
     }
 
     public async getJacket(identifier: string) {
-        const { sort } = resolveIdentifier(identifier);
-        const songs = await this.getAllSongs();
-        const song = songs.find((song) => song.sort === sort);
+        const { key } = resolveIdentifier(identifier);
+        const { byKey } = await this.getIndex();
+        const song = byKey.get(key);
         if (!song?.image_url) {
             return { err: `Cannot find the jacket of ${identifier}.` };
         }
@@ -178,11 +239,11 @@ export class Database implements BaseDatabase<Chart> {
             maxResultCount: number;
         }>,
     ) {
-        const songs = await this.getAllSongs();
-        const sortedCandidates = songs
-            .filter((song) => song.title === payload.title)
-            .map((song) =>
-                this.buildChart(song, payload.type, payload.difficulty),
+        const { list } = await this.getIndex();
+        const sortedCandidates = list
+            .filter(({ song }) => song.title === payload.title)
+            .map(({ key, song }) =>
+                this.buildChart(key, song, payload.type, payload.difficulty),
             )
             .filter((chart): chart is Chart => chart !== null)
             .map((chart) => {
