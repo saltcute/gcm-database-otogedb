@@ -55,5 +55,5 @@ export function parseDisplayLevel(
     const plus = level.endsWith("+");
     const number = Number.parseInt(level, 10);
     if (Number.isNaN(number)) return undefined;
-    return plus ? number + 0.5 : number;
+    return plus ? number + 0.6 : number;
 }
