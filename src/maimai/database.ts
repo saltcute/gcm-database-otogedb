@@ -6,7 +6,7 @@ import {
     toDecimal,
     toInteger,
 } from "@lib/otogedb";
-import { CdnSource, Regions, type Source } from "@lib/source";
+import { CdnSource, type Regions, type Source } from "@lib/source";
 import { Cache } from "@saltcute/cache";
 import {
     type Database as BaseDatabase,
@@ -52,7 +52,10 @@ export class Database implements BaseDatabase<Chart> {
      * @param source Where charts and jackets are read from. Defaults to the
      * jsDelivr CDN; pass a {@link LocalSource} to read from a cloned repo.
      */
-    constructor(private source: Source = new CdnSource(), private region: Regions = "JPN") {}
+    constructor(
+        private source: Source = new CdnSource(),
+        private region: Regions = "JPN",
+    ) {}
 
     private async getAllSongs() {
         const key = `${this.source.getMusicListName("maimai", this.region)}:${this.source.cacheKey}`;
